@@ -8,15 +8,19 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const CHAT_ID = process.env.CHAT_ID;
 const GH_TOKEN = process.env.GH_TOKEN;
 const SECRET = process.env.CRON_SECRET;
+const BC_TOKEN = process.env.BC_ACCESS_TOKEN;
+const BC_ACCOUNT = process.env.BC_ACCOUNT_ID;
+const BC_EMAIL = process.env.BC_USER_EMAIL;
 
-function sendTelegram(text) {
+function sendTelegram(text, extra = {}) {
   return new Promise((resolve, reject) => {
-    const data = "chat_id=" + CHAT_ID + "&text=" + encodeURIComponent(text) + "&parse_mode=HTML";
+    const payload = { chat_id: CHAT_ID, text: text, parse_mode: "HTML", ...extra };
+    const data = JSON.stringify(payload);
     const req = https.request({
       hostname: "api.telegram.org",
       path: "/bot" + BOT_TOKEN + "/sendMessage",
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" }
+      headers: { "Content-Type": "application/json" }
     }, res => { let d = ""; res.on("data", c => d += c); res.on("end", () => resolve(d)); });
     req.on("error", reject);
     req.write(data);
@@ -51,17 +55,92 @@ function ghAPI(path, method = "GET", body = null) {
   });
 }
 
+function bcAPI(path, method = "GET", body = null) {
+  return new Promise((resolve, reject) => {
+    const options = {
+      hostname: "3.basecampapi.com",
+      path: "/" + BC_ACCOUNT + path,
+      method: method,
+      headers: {
+        "Authorization": "Bearer " + BC_TOKEN,
+        "User-Agent": "FoodXp Bot (" + BC_EMAIL + ")",
+        "Accept": "application/json"
+      }
+    };
+    if (body) {
+      options.headers["Content-Type"] = "application/json";
+      options.headers["Content-Length"] = Buffer.byteLength(JSON.stringify(body));
+    }
+    const req = https.request(options, res => {
+      let d = "";
+      res.on("data", c => d += c);
+      res.on("end", () => {
+        try { resolve(d ? JSON.parse(d) : []); } catch (e) { resolve([]); }
+      });
+    });
+    req.on("error", reject);
+    if (body) req.write(JSON.stringify(body));
+    req.end();
+  });
+}
+
 app.get("/", (req, res) => res.send("OK"));
 
 // Telegram webhook - handles user replies
 app.post("/webhook", async (req, res) => {
   try {
     const message = req.body && req.body.message;
-    if (!message || !message.text) return res.send("OK");
+    const callback = req.body && req.body.callback_query;
 
+    // Handle Callback Queries (Buttons)
+    if (callback) {
+      const data = callback.data;
+      const chatId = String(callback.message.chat.id);
+      if (chatId !== CHAT_ID) return res.send("OK");
+
+      // Step 2: Project selected -> Show PRs
+      if (data.startsWith("rv_p:")) {
+        const projectId = data.split(":")[1];
+        const prs = await ghAPI("/repos/travelxp/foodxp-cms/pulls?state=open");
+        const myPRs = prs.filter(p => p.user.login === "AnishTxp");
+        
+        if (myPRs.length === 0) {
+          await sendTelegram("No open PRs found to review.");
+          return res.send("OK");
+        }
+
+        const buttons = myPRs.map(p => ([{ text: "PR #" + p.number + ": " + p.title.substring(0, 30), callback_data: "rv_s:" + projectId + ":" + p.number }]));
+        await sendTelegram("Selected Project: " + projectId + "\n\nSelect a PR to share:", {
+          reply_markup: { inline_keyboard: buttons }
+        });
+      }
+
+      // Step 3: PR selected -> Post to Basecamp
+      if (data.startsWith("rv_s:")) {
+        const [_, pId, prNum] = data.split(":");
+        const pr = await ghAPI("/repos/travelxp/foodxp-cms/pulls/" + prNum);
+        
+        // Find Campfire ID
+        const project = await bcAPI("/buckets/" + pId + ".json");
+        const campfireTool = project.dock.find(t => t.name === "chat" || t.title === "Campfire");
+        
+        if (!campfireTool) {
+          await sendTelegram("❌ Could not find a Campfire chat for this project.");
+          return res.send("OK");
+        }
+
+        const chatIdBC = campfireTool.url.split("/").pop().replace(".json", "");
+        const msgText = pr.html_url + " 🌳 Dhruv sir please review this PR";
+        
+        await bcAPI("/buckets/" + pId + "/chats/" + chatIdBC + "/lines.json", "POST", { content: msgText });
+        await sendTelegram("✅ Posted to Basecamp Campfire!");
+      }
+      return res.send("OK");
+    }
+
+    if (!message || !message.text) return res.send("OK");
     const chatId = String(message.chat.id);
     if (chatId !== CHAT_ID) return res.send("OK");
-
     const text = message.text.trim();
 
     const helpMsg = "🍳 <b>FoodXp Notifier Bot Help</b>\n\n"
@@ -73,7 +152,10 @@ app.post("/webhook", async (req, res) => {
       + "• /issues foodxp-b2c-service — all issues in B2C\n"
       + "• /issues foodxp-mongodb — all issues in MongoDB\n"
       + "• /issues_assigned — issues assigned to you\n"
-      + "• /prs — show your open PRs\n"
+      + "• /prs — show your open PRs\n\n"
+      + "<b>Basecamp:</b>\n"
+      + "• /bc_todos — show your assigned to-dos\n"
+      + "• /review — request review on Basecamp\n\n"
       + "• /help — show this menu";
 
     // Handle /start and /help
@@ -130,6 +212,43 @@ app.post("/webhook", async (req, res) => {
       }
       const list = myPRs.map(p => "• PR #" + p.number + " — " + p.title + "\n  " + p.html_url).join("\n");
       await sendTelegram("🔀 " + myPRs.length + " open PRs:\n\n" + list);
+      return res.send("OK");
+    }
+
+    // Handle /bc_todos
+    if (text === "/bc_todos") {
+      if (!BC_TOKEN) return await sendTelegram("Basecamp Token not configured on Render.");
+      const todos = await bcAPI("/my/todos.json");
+      if (!Array.isArray(todos) || todos.length === 0) {
+        await sendTelegram("✅ No pending Basecamp to-dos!");
+        return res.send("OK");
+      }
+      const list = todos.slice(0, 10).map(t => "• " + t.content + " (" + t.bucket.name + ")").join("\n");
+      await sendTelegram("📝 <b>Your Basecamp To-Dos:</b>\n\n" + list + (todos.length > 10 ? "\n\n<i>Showing top 10...</i>" : ""));
+      return res.send("OK");
+    }
+
+    // Handle /bc_projects
+    if (text === "/bc_projects") {
+      const projects = await bcAPI("/projects.json");
+      if (!Array.isArray(projects) || projects.length === 0) {
+        await sendTelegram("📂 No Basecamp projects found.");
+        return res.send("OK");
+      }
+      const list = projects.map(p => "• " + p.name + " (ID: " + p.id + ")").join("\n");
+      await sendTelegram("📂 <b>Basecamp Projects:</b>\n\n" + list);
+      return res.send("OK");
+    }
+
+    // Handle /review
+    if (text === "/review") {
+      const projects = await bcAPI("/projects.json");
+      if (!Array.isArray(projects) || projects.length === 0) return await sendTelegram("No Basecamp projects found.");
+      
+      const buttons = projects.slice(0, 10).map(p => ([{ text: p.name, callback_data: "rv_p:" + p.id }]));
+      await sendTelegram("📋 Select a Basecamp group/project to post the review request:", {
+        reply_markup: { inline_keyboard: buttons }
+      });
       return res.send("OK");
     }
 
