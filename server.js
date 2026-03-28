@@ -253,20 +253,42 @@ app.post("/webhook", async (req, res) => {
         await sendTelegram("✅ Successfully updated the " + project.name + " Message Board!");
       }
 
-      // PR FLOW: Show PRs by state
+      // PR FLOW: Step 2: Show Status buttons for repo
+      if (data.startsWith("pr_rs:")) {
+        const repo = data.split(":")[1];
+        const buttons = [
+          [{ text: "📂 View Open PRs", callback_data: "pr_v:" + repo + ":open" }],
+          [{ text: "📁 View Closed PRs", callback_data: "pr_v:" + repo + ":closed" }],
+          [{ text: "🔙 Back", callback_data: "pr_r_list" }]
+        ];
+        await sendTelegram("🔀 <b>Repository:</b> " + repo + "\nSelect the status you'd like to view:", { reply_markup: { inline_keyboard: buttons } });
+      }
+
+      // PR FLOW: Step 3: Show PR List
       if (data.startsWith("pr_v:")) {
-        const state = data.split(":")[1];
-        const prs = await ghAPI("/repos/travelxp/foodxp-cms/pulls?state=" + state + "&per_page=15");
+        const [_, repo, state] = data.split(":");
+        const prs = await ghAPI("/repos/travelxp/" + repo + "/pulls?state=" + state + "&per_page=15");
         const myPRs = prs.filter(p => p.user.login === "AnishTxp");
         
         if (myPRs.length === 0) {
-          await sendTelegram("No " + state + " PRs found.");
+          const buttons = [[{ text: (state === "open" ? "👁️ View Closed" : "👁️ View Open"), callback_data: "pr_v:" + repo + ":" + (state === "open" ? "closed" : "open") }], [{ text: "🔙 Back", callback_data: "pr_rs:" + repo }]];
+          await sendTelegram("No " + state + " PRs found in " + repo, { reply_markup: { inline_keyboard: buttons } });
           return res.send("OK");
         }
 
         const list = myPRs.map(p => "• PR #" + p.number + " — " + p.title + "\n  " + p.html_url).join("\n");
-        const buttons = [[{ text: (state === "open" ? "📂 View Closed" : "📂 View Open"), callback_data: "pr_v:" + (state === "open" ? "closed" : "open") }]];
-        await sendTelegram("🔀 <b>" + (state === "open" ? "Open" : "Closed") + " PRs (Assigned):</b>\n\n" + list, { reply_markup: { inline_keyboard: buttons } });
+        const buttons = [
+          [{ text: (state === "open" ? "👁️ View Closed" : "👁️ View Open"), callback_data: "pr_v:" + repo + ":" + (state === "open" ? "closed" : "open") }],
+          [{ text: "🔙 Back", callback_data: "pr_rs:" + repo }]
+        ];
+        await sendTelegram("🔀 <b>" + repo + " (" + state + "):</b>\n\n" + list, { reply_markup: { inline_keyboard: buttons } });
+      }
+
+      // PR FLOW: Repo list
+      if (data === "pr_r_list") {
+        const repos = ["foodxp-cms", "foodxp-b2c-service", "foodxp-mongodb"];
+        const buttons = repos.map(r => ([{ text: "📁 " + r, callback_data: "pr_rs:" + r }]));
+        await sendTelegram("🔀 <b>GitHub Pull Requests</b>\nSelect a repository:", { reply_markup: { inline_keyboard: buttons } });
       }
       return res.send("OK");
     }
@@ -346,11 +368,9 @@ app.post("/webhook", async (req, res) => {
 
     // Handle /prs (Interactive)
     if (text === "/prs") {
-      const buttons = [
-        [{ text: "📂 View Open PRs", callback_data: "pr_v:open" }],
-        [{ text: "📁 View Closed PRs", callback_data: "pr_v:closed" }]
-      ];
-      await sendTelegram("🔀 <b>GitHub Pull Requests</b>\nSelect the status you'd like to view:", {
+      const repos = ["foodxp-cms", "foodxp-b2c-service", "foodxp-mongodb"];
+      const buttons = repos.map(r => ([{ text: "📁 " + r, callback_data: "pr_rs:" + r }]));
+      await sendTelegram("🔀 <b>GitHub Pull Requests</b>\nSelect a repository:", {
         reply_markup: { inline_keyboard: buttons }
       });
       return res.send("OK");
