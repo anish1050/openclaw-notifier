@@ -64,20 +64,24 @@ app.post("/webhook", async (req, res) => {
 
     const text = message.text.trim();
 
-    // Handle /start
-    if (text === "/start") {
-      await sendTelegram("🍳 FoodXp Notifier Bot\n\nCommands:\n• Send #286 to see details\n• /code 286 — start AI coding on issue\n• /issues — show all assigned issues\n• /prs — show open PRs\n• /help — show this message");
+    const helpMsg = "🍳 <b>FoodXp Notifier Bot Help</b>\n\n"
+      + "<b>Commands:</b>\n"
+      + "• Send #286 — view issue details\n"
+      + "• /code 286 — start AI coding agent on issue\n\n"
+      + "<b>Lists:</b>\n"
+      + "• /issues_assigned — open issues assigned to you\n"
+      + "• /issues [repo] — show all issues in a repo (e.g., /issues foodxp-cms)\n"
+      + "• /prs — show your open PRs\n"
+      + "• /help — show this menu";
+
+    // Handle /start and /help
+    if (text === "/start" || text === "/help") {
+      await sendTelegram(helpMsg);
       return res.send("OK");
     }
 
-    // Handle /help
-    if (text === "/help") {
-      await sendTelegram("🍳 FoodXp Notifier Bot\n\nCommands:\n• Send an issue number like #286 to see details\n• /issues — show all assigned issues\n• /prs — show open PRs\n• /help — show this message");
-      return res.send("OK");
-    }
-
-    // Handle /issues
-    if (text === "/issues") {
+    // Handle /issues_assigned (specifically requested name)
+    if (text === "/issues_assigned" || text === "/issues-assigned-to-me" || text === "/issues") {
       const issues = await ghAPI("/repos/travelxp/foodxp-cms/issues?assignee=AnishTxp&state=open");
       const filtered = issues.filter(i => !i.pull_request);
       if (filtered.length === 0) {
@@ -86,9 +90,31 @@ app.post("/webhook", async (req, res) => {
       }
       const list = filtered.map(i => {
         const labels = i.labels.map(l => l.name).join(", ");
-        return "• #" + i.number + " — " + i.title + " [" + labels + "]";
+        return "• #" + i.number + " — " + i.title + (labels ? " [" + labels + "]" : "");
       }).join("\n");
-      await sendTelegram("📋 " + filtered.length + " open issues:\n\n" + list + "\n\nSend #number for details.");
+      await sendTelegram("📋 " + filtered.length + " issues assigned to you:\n\n" + list + "\n\nSend #number for details.");
+      return res.send("OK");
+    }
+
+    // Handle /issues <repo>
+    if (text.startsWith("/issues ")) {
+      let repo = text.split(" ")[1];
+      if (!repo.includes("/")) repo = "travelxp/" + repo;
+      
+      const issues = await ghAPI("/repos/" + repo + "/issues?state=open");
+      if (issues.message === "Not Found") {
+        await sendTelegram("Repository <code>" + repo + "</code> not found.");
+        return res.send("OK");
+      }
+      
+      const filtered = Array.isArray(issues) ? issues.filter(i => !i.pull_request).slice(0, 15) : [];
+      if (filtered.length === 0) {
+        await sendTelegram("No open issues found in " + repo);
+        return res.send("OK");
+      }
+      
+      const list = filtered.map(i => "• #" + i.number + " — " + i.title).join("\n");
+      await sendTelegram("📂 <b>" + repo + "</b> Issues:\n\n" + list + (issues.length > 15 ? "\n\n<i>Showing top 15...</i>" : ""));
       return res.send("OK");
     }
 
