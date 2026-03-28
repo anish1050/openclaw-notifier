@@ -191,12 +191,19 @@ app.post("/webhook", async (req, res) => {
         await sendTelegram("📂 <b>" + repo + "</b> (" + state + "):", { reply_markup: { inline_keyboard: buttons } });
       }
 
-      // CODE FLOW: Selected Issue -> Show Start Button
+      // CODE FLOW: Selected Issue -> Show Description & Start Button
       if (data.startsWith("cd_sel:")) {
         const [_, repo, num] = data.split(":");
-        const buttons = [[{ text: "🚀 Start AI Coding Agent", callback_data: "cd_run:" + repo + ":" + num }]];
-        buttons.push([{ text: "🔙 Back to List", callback_data: "cd_root" }]);
-        await sendTelegram("Issue <code>#" + num + "</code> selected from <code>" + repo + "</code>.\nReady to start the OpenClaw agent?", { reply_markup: { inline_keyboard: buttons } });
+        const issue = await ghAPI("/repos/travelxp/" + repo + "/issues/" + num);
+        
+        const description = issue.body ? issue.body.substring(0, 1000) + (issue.body.length > 1000 ? "..." : "") : "No description provided.";
+        const msg = "📝 <b>" + issue.title + "</b>\n\n" + description + "\n\nReady to start the <b>OpenClaw Agent</b> for issue #" + num + "?";
+        
+        const buttons = [
+          [{ text: "🚀 Start AI Coding Agent", callback_data: "cd_run:" + repo + ":" + num }],
+          [{ text: "🔙 Back to List", callback_data: "cd_root" }]
+        ];
+        await sendTelegram(msg, { reply_markup: { inline_keyboard: buttons } });
       }
 
       // CODE FLOW: RUN
