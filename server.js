@@ -155,7 +155,8 @@ app.get("/pr-comments", async (req, res) => {
     const prs = await ghAPI("/repos/travelxp/foodxp-cms/pulls?state=open");
     const myPRs = prs.filter(p => p.user.login === "AnishTxp");
     if (myPRs.length === 0) return res.send("No open PRs");
-    const since = new Date(Date.now() - 14 * 60 * 1000).toISOString();
+    /* In server.js */
+    const since = new Date(Date.now() - 30 * 60 * 1000).toISOString();
     for (const pr of myPRs) {
       const comments = await ghAPI("/repos/travelxp/foodxp-cms/pulls/" + pr.number + "/comments");
       const reviews = await ghAPI("/repos/travelxp/foodxp-cms/pulls/" + pr.number + "/reviews");
