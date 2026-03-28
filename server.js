@@ -251,6 +251,22 @@ app.post("/webhook", async (req, res) => {
         
         await sendTelegram("✅ Successfully updated the Basecamp Message Board!");
       }
+
+      // PR FLOW: Show PRs by state
+      if (data.startsWith("pr_v:")) {
+        const state = data.split(":")[1];
+        const prs = await ghAPI("/repos/travelxp/foodxp-cms/pulls?state=" + state + "&per_page=15");
+        const myPRs = prs.filter(p => p.user.login === "AnishTxp");
+        
+        if (myPRs.length === 0) {
+          await sendTelegram("No " + state + " PRs found.");
+          return res.send("OK");
+        }
+
+        const list = myPRs.map(p => "• PR #" + p.number + " — " + p.title + "\n  " + p.html_url).join("\n");
+        const buttons = [[{ text: (state === "open" ? "📂 View Closed" : "📂 View Open"), callback_data: "pr_v:" + (state === "open" ? "closed" : "open") }]];
+        await sendTelegram("🔀 <b>" + (state === "open" ? "Open" : "Closed") + " PRs (Assigned):</b>\n\n" + list, { reply_markup: { inline_keyboard: buttons } });
+      }
       return res.send("OK");
     }
 
@@ -327,16 +343,15 @@ app.post("/webhook", async (req, res) => {
       return res.send("OK");
     }
 
-    // Handle /prs
+    // Handle /prs (Interactive)
     if (text === "/prs") {
-      const prs = await ghAPI("/repos/travelxp/foodxp-cms/pulls?state=open");
-      const myPRs = prs.filter(p => p.user.login === "AnishTxp");
-      if (myPRs.length === 0) {
-        await sendTelegram("No open PRs.");
-        return res.send("OK");
-      }
-      const list = myPRs.map(p => "• PR #" + p.number + " — " + p.title + "\n  " + p.html_url).join("\n");
-      await sendTelegram("🔀 " + myPRs.length + " open PRs:\n\n" + list);
+      const buttons = [
+        [{ text: "📂 View Open PRs", callback_data: "pr_v:open" }],
+        [{ text: "📁 View Closed PRs", callback_data: "pr_v:closed" }]
+      ];
+      await sendTelegram("🔀 <b>GitHub Pull Requests</b>\nSelect the status you'd like to view:", {
+        reply_markup: { inline_keyboard: buttons }
+      });
       return res.send("OK");
     }
 
