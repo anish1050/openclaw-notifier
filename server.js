@@ -75,7 +75,12 @@ function bcAPI(path, method = "GET", body = null) {
       let d = "";
       res.on("data", c => d += c);
       res.on("end", () => {
-        try { resolve(d ? JSON.parse(d) : []); } catch (e) { resolve([]); }
+        if (res.statusCode >= 400) {
+          console.error("Basecamp API Error (" + res.statusCode + "): " + d);
+          resolve({ error: res.statusCode, message: d });
+        } else {
+          try { resolve(d ? JSON.parse(d) : []); } catch (e) { resolve([]); }
+        }
       });
     });
     req.on("error", reject);
@@ -135,6 +140,117 @@ app.post("/webhook", async (req, res) => {
         await bcAPI("/buckets/" + pId + "/chats/" + chatIdBC + "/lines.json", "POST", { content: msgText });
         await sendTelegram("✅ Posted to Basecamp Campfire!");
       }
+
+      // GH Step: Repo selected -> Show Issues
+      if (data.startsWith("gh_r:")) {
+        const repo = data.split(":")[1];
+        const issues = await ghAPI("/repos/travelxp/" + repo + "/issues?state=open");
+        const filtered = Array.isArray(issues) ? issues.filter(i => !i.pull_request).slice(0, 15) : [];
+        if (filtered.length === 0) return await sendTelegram("No open issues in " + repo);
+        const list = filtered.map(i => "• #" + i.number + " — " + i.title).join("\n");
+        await sendTelegram("📂 <b>" + repo + "</b> Issues:\n\n" + list);
+      }
+
+      // CODE FLOW: Root Menu
+      if (data === "cd_root") {
+        const buttons = [
+          [{ text: "👤 Issues Assigned to Me", callback_data: "cd_asgn:open" }],
+          [{ text: "📦 Select Repository", callback_data: "cd_r_list" }]
+        ];
+        await sendTelegram("🤖 <b>OpenClaw Agent</b>\nWhere would you like to start coding?", { reply_markup: { inline_keyboard: buttons } });
+      }
+
+      // CODE FLOW: Assigned issues (Open or Closed)
+      if (data.startsWith("cd_asgn:")) {
+        const state = data.split(":")[1];
+        const issues = await ghAPI("/repos/travelxp/foodxp-cms/issues?assignee=AnishTxp&state=" + state);
+        const filtered = issues.filter(i => !i.pull_request).slice(0, 10);
+        const buttons = filtered.map(i => ([{ text: "#" + i.number + ": " + i.title.substring(0, 30), callback_data: "cd_sel:foodxp-cms:" + i.number }]));
+        buttons.push([{ text: (state === "open" ? "👁️ View Closed" : "👁️ View Open"), callback_data: "cd_asgn:" + (state === "open" ? "closed" : "open") }]);
+        buttons.push([{ text: "🔙 Back", callback_data: "cd_root" }]);
+        await sendTelegram("📋 <b>" + (state === "open" ? "Open" : "Closed") + " Issues (Assigned):</b>", { reply_markup: { inline_keyboard: buttons } });
+      }
+
+      // CODE FLOW: Repo list
+      if (data === "cd_r_list") {
+        const repos = ["foodxp-cms", "foodxp-b2c-service", "foodxp-mongodb"];
+        const buttons = repos.map(r => ([{ text: "📁 " + r, callback_data: "cd_rl:" + r + ":open" }]));
+        buttons.push([{ text: "🔙 Back", callback_data: "cd_root" }]);
+        await sendTelegram("Select a repository to explore issues:", { reply_markup: { inline_keyboard: buttons } });
+      }
+
+      // CODE FLOW: Repo Issues list
+      if (data.startsWith("cd_rl:")) {
+        const [_, repo, state] = data.split(":");
+        const issues = await ghAPI("/repos/travelxp/" + repo + "/issues?state=" + state);
+        const filtered = Array.isArray(issues) ? issues.filter(i => !i.pull_request).slice(0, 10) : [];
+        const buttons = filtered.map(i => ([{ text: "#" + i.number + ": " + i.title.substring(0, 30), callback_data: "cd_sel:" + repo + ":" + i.number }]));
+        buttons.push([{ text: (state === "open" ? "👁️ View Closed" : "👁️ View Open"), callback_data: "cd_rl:" + repo + ":" + (state === "open" ? "closed" : "open") }]);
+        buttons.push([{ text: "🔙 Repository List", callback_data: "cd_r_list" }]);
+        await sendTelegram("📂 <b>" + repo + "</b> (" + state + "):", { reply_markup: { inline_keyboard: buttons } });
+      }
+
+      // CODE FLOW: Selected Issue -> Show Start Button
+      if (data.startsWith("cd_sel:")) {
+        const [_, repo, num] = data.split(":");
+        const buttons = [[{ text: "🚀 Start AI Coding Agent", callback_data: "cd_run:" + repo + ":" + num }]];
+        buttons.push([{ text: "🔙 Back to List", callback_data: "cd_root" }]);
+        await sendTelegram("Issue <code>#" + num + "</code> selected from <code>" + repo + "</code>.\nReady to start the OpenClaw agent?", { reply_markup: { inline_keyboard: buttons } });
+      }
+
+      // CODE FLOW: RUN
+      if (data.startsWith("cd_run:")) {
+        const [_, repo, num] = data.split(":");
+        await sendTelegram("🤖 Starting <b>OpenClaw Agent</b> for " + repo + " #" + num + "...\n(Tracking progress live)");
+        
+        const payload = { ref: "main", inputs: { issue_number: num } };
+        // Dispatch to the specific repository selected
+        await ghAPI("/repos/travelxp/" + repo + "/actions/workflows/openclaw.yml/dispatches", "POST", payload);
+        await sendTelegram("✅ Dispatch successful. Monitor logs on GitHub Actions.");
+      }
+
+      // MB Step 2: Project selected -> Show Closed PRs
+      if (data.startsWith("mb_p:")) {
+        const pId = data.split(":")[1];
+        const prs = await ghAPI("/repos/travelxp/foodxp-cms/pulls?state=closed&per_page=10");
+        const myClosedPRs = prs.filter(p => p.user.login === "AnishTxp" && p.merged_at);
+        
+        if (myClosedPRs.length === 0) {
+          await sendTelegram("No recently merged PRs found.");
+          return res.send("OK");
+        }
+
+        const buttons = myClosedPRs.map(p => ([{ text: "PR #" + p.number + ": " + p.title.substring(0, 30), callback_data: "mb_s:" + pId + ":" + p.number }]));
+        await sendTelegram("Select a Merged PR to log on Message Board:", {
+          reply_markup: { inline_keyboard: buttons }
+        });
+      }
+
+      // MB Step 3: PR selected -> Post to Message Board
+      if (data.startsWith("mb_s:")) {
+        const [_, pId, prNum] = data.split(":");
+        const pr = await ghAPI("/repos/travelxp/foodxp-cms/pulls/" + prNum);
+        
+        const project = await bcAPI("/buckets/" + pId + ".json");
+        const mbTool = project.dock.find(t => t.name === "message_board");
+        
+        if (!mbTool) {
+          await sendTelegram("❌ Message Board not found in this project.");
+          return res.send("OK");
+        }
+
+        const mbId = mbTool.url.split("/").pop().replace(".json", "");
+        const bodyContent = "<div><strong>What Changed</strong><br/>" 
+          + "<ul>" + (pr.body ? pr.body.split("\n").filter(l => l.trim().startsWith("-")).map(l => "<li>" + l.replace("-", "").trim() + "</li>").join("") : "<li>No details.</li>") + "</ul>"
+          + "<br/><a href=\"" + pr.html_url + "\">" + pr.html_url + "</a><br/>🚀</div>";
+
+        await bcAPI("/buckets/" + pId + "/message_boards/" + mbId + "/messages.json", "POST", {
+          subject: (pr.base.ref === "master" || pr.base.ref === "main" ? "Master " : "") + "PR#" + pr.number,
+          content: bodyContent
+        });
+        
+        await sendTelegram("✅ Successfully updated the Basecamp Message Board!");
+      }
       return res.send("OK");
     }
 
@@ -143,20 +259,19 @@ app.post("/webhook", async (req, res) => {
     if (chatId !== CHAT_ID) return res.send("OK");
     const text = message.text.trim();
 
-    const helpMsg = "🍳 <b>FoodXp Notifier Bot Help</b>\n\n"
-      + "<b>Commands:</b>\n"
-      + "• Send #286 — view full issue task / description\n"
-      + "• /code 286 — start AI coding on ANY issue\n\n"
-      + "<b>Lists:</b>\n"
-      + "• /issues foodxp-cms — all issues in CMS\n"
-      + "• /issues foodxp-b2c-service — all issues in B2C\n"
-      + "• /issues foodxp-mongodb — all issues in MongoDB\n"
-      + "• /issues_assigned — issues assigned to you\n"
-      + "• /prs — show your open PRs\n\n"
-      + "<b>Basecamp:</b>\n"
-      + "• /bc_todos — show your assigned to-dos\n"
-      + "• /review — request review on Basecamp\n\n"
-      + "• /help — show this menu";
+    const helpMsg = "🚀 <b>OpenClaw AI & Notifier Dashboard</b>\n\n"
+      + "<b>🤖 AI AGENT (OpenClaw)</b>\n"
+      + "• Send <code>#286</code> — view the full task description\n"
+      + "• <code>/code 286</code> — start AI to fix issue #286\n\n"
+      + "<b>🍱 GITHUB TOOLS</b>\n"
+      + "• <code>/issues</code> — list issues by repository\n"
+      + "• <code>/issues_assigned</code> — issues assigned to you\n"
+      + "• <code>/prs</code> — view your open pulls\n\n"
+      + "<b>🏕️ BASECAMP TOOLS</b>\n"
+      + "• <code>/review</code> — post PR to Campfire\n"
+      + "• <code>/update_message_board</code> — log PR changes\n"
+      + "• <code>/bc_todos</code> — your active tasks\n\n"
+      + "<i>Type /help anytime to see this menu.</i>";
 
     // Handle /start and /help
     if (text === "/start" || text === "/help") {
@@ -164,8 +279,18 @@ app.post("/webhook", async (req, res) => {
       return res.send("OK");
     }
 
-    // Handle /issues_assigned (specifically requested name)
-    if (text === "/issues_assigned" || text === "/issues-assigned-to-me" || text === "/issues") {
+    // Handle /issues (Repo selection)
+    if (text === "/issues") {
+      const repos = ["foodxp-cms", "foodxp-b2c-service", "foodxp-mongodb"];
+      const buttons = repos.map(r => ([{ text: "📁 " + r, callback_data: "gh_r:" + r }]));
+      await sendTelegram("Select a repository to view open issues:", {
+        reply_markup: { inline_keyboard: buttons }
+      });
+      return res.send("OK");
+    }
+
+    // Handle /issues_assigned
+    if (text === "/issues_assigned" || text === "/issues-assigned-to-me") {
       const issues = await ghAPI("/repos/travelxp/foodxp-cms/issues?assignee=AnishTxp&state=open");
       const filtered = issues.filter(i => !i.pull_request);
       if (filtered.length === 0) {
@@ -219,34 +344,37 @@ app.post("/webhook", async (req, res) => {
     if (text === "/bc_todos") {
       if (!BC_TOKEN) return await sendTelegram("Basecamp Token not configured on Render.");
       const todos = await bcAPI("/my/todos.json");
+      if (todos.error) return await sendTelegram("❌ <b>Basecamp Error:</b> " + todos.error + "\nCheck your Token and ID.");
       if (!Array.isArray(todos) || todos.length === 0) {
         await sendTelegram("✅ No pending Basecamp to-dos!");
         return res.send("OK");
       }
-      const list = todos.slice(0, 10).map(t => "• " + t.content + " (" + t.bucket.name + ")").join("\n");
-      await sendTelegram("📝 <b>Your Basecamp To-Dos:</b>\n\n" + list + (todos.length > 10 ? "\n\n<i>Showing top 10...</i>" : ""));
-      return res.send("OK");
-    }
-
-    // Handle /bc_projects
-    if (text === "/bc_projects") {
-      const projects = await bcAPI("/projects.json");
-      if (!Array.isArray(projects) || projects.length === 0) {
-        await sendTelegram("📂 No Basecamp projects found.");
-        return res.send("OK");
-      }
-      const list = projects.map(p => "• " + p.name + " (ID: " + p.id + ")").join("\n");
-      await sendTelegram("📂 <b>Basecamp Projects:</b>\n\n" + list);
+      const list = todos.slice(0, 10).map(t => "• " + t.content + " (Project: " + t.bucket.name + ")").join("\n");
+      await sendTelegram("📝 <b>Current Basecamp To-Dos:</b>\n\n" + list + (todos.length > 10 ? "\n\n<i>Showing top 10...</i>" : ""));
       return res.send("OK");
     }
 
     // Handle /review
     if (text === "/review") {
       const projects = await bcAPI("/projects.json");
+      if (projects.error) return await sendTelegram("❌ <b>Basecamp Error:</b> " + projects.error + " (Forbidden/Unauthorized)");
       if (!Array.isArray(projects) || projects.length === 0) return await sendTelegram("No Basecamp projects found.");
       
       const buttons = projects.slice(0, 10).map(p => ([{ text: p.name, callback_data: "rv_p:" + p.id }]));
-      await sendTelegram("📋 Select a Basecamp group/project to post the review request:", {
+      await sendTelegram("📂 Select a Basecamp project/group to post review request:", {
+        reply_markup: { inline_keyboard: buttons }
+      });
+      return res.send("OK");
+    }
+
+    // Handle /update_message_board
+    if (text === "/update_message_board") {
+      const projects = await bcAPI("/projects.json");
+      if (projects.error) return await sendTelegram("❌ <b>Basecamp Error:</b> " + projects.error);
+      if (!Array.isArray(projects) || projects.length === 0) return await sendTelegram("No Basecamp projects found.");
+
+      const buttons = projects.slice(0, 10).map(p => ([{ text: p.name, callback_data: "mb_p:" + p.id }]));
+      await sendTelegram("🗂 Select project to update Message Board:", {
         reply_markup: { inline_keyboard: buttons }
       });
       return res.send("OK");
@@ -281,23 +409,15 @@ app.post("/webhook", async (req, res) => {
       return res.send("OK");
     }
 
-    // Handle /code (starts OpenClaw agent)
-    if (text.startsWith("/code")) {
-      const issueNum = text.split(" ")[1];
-      if (!issueNum) {
-        await sendTelegram("Please provide an issue number, e.g., /code 286");
-        return res.send("OK");
-      }
-
-      await sendTelegram("🤖 Triggering <b>OpenClaw</b> for Issue #" + issueNum + "...\nModel: OpenRouter (Claude-3.5-Sonnet)");
-      
-      const payload = {
-        ref: "main", // or your default branch
-        inputs: { issue_number: issueNum.replace("#", "") }
-      };
-
-      await ghAPI("/repos/travelxp/foodxp-cms/actions/workflows/openclaw.yml/dispatches", "POST", payload);
-      await sendTelegram("✅ Workflow dispatched! Tracking progress on GitHub...");
+    // Handle /code (Interactive flow)
+    if (text === "/code") {
+      const buttons = [
+        [{ text: "👤 Issues Assigned to Me", callback_data: "cd_asgn:open" }],
+        [{ text: "📦 Select Repository", callback_data: "cd_r_list" }]
+      ];
+      await sendTelegram("🤖 <b>OpenClaw Agent Builder</b>\nSelect an option to start coding:", {
+        reply_markup: { inline_keyboard: buttons }
+      });
       return res.send("OK");
     }
 
