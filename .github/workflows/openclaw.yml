@@ -30,16 +30,20 @@ jobs:
           # 2. Send initial message
           RESPONSE=$(curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
             -d "chat_id=${CHAT_ID}" \
-            -d "text=🤖 <b>OpenClaw Agent Started</b> (Issue #${{ github.event.inputs.issue_number }})%0AInitializing..." \
+            -d "text=🤖 <b>OpenClaw Agent Started</b> (Issue #${{ github.event.inputs.issue_number }})%0AStarting execution..." \
             -d "parse_mode=HTML")
           MSG_ID=$(echo $RESPONSE | jq -r '.result.message_id')
           
-          # 3. Enhanced background loop (every 7s)
+          if [ "$MSG_ID" == "null" ] || [ -z "$MSG_ID" ]; then
+            echo "Failed to get MSG_ID from Telegram: $RESPONSE"
+            exit 1
+          fi
+
+          # 3. Robust background loop
           (
-            while sleep 7; do
+            while sleep 8; do
               if [ -s "agent.log" ]; then
-                # Get last 15 lines, escape for HTML
-                LATEST_LOG=$(tail -n 15 agent.log | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
+                LATEST_LOG=$(tail -n 12 agent.log | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
                 curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/editMessageText" \
                   -d "chat_id=${CHAT_ID}" \
                   -d "message_id=${MSG_ID}" \
@@ -50,25 +54,28 @@ jobs:
           ) &
           UPDATER_PID=$!
 
-          # 4. Run OpenClaw (Unbuffered)
+          # 4. Run OpenClaw with explicit error capture
           git config --global user.email "bot@openclaw.com"
           git config --global user.name "OpenClaw Bot"
           
-          # Force unbuffered output
-          script -q -c "openclaw onboard --auth-choice apiKey --token-provider openrouter --token '$OPENROUTER_API_KEY' && openclaw start --issue ${{ github.event.inputs.issue_number }} --model 'google/gemini-2.0-flash-exp:free'" /dev/null | tee -a agent.log
+          echo "Current Directory Content:" >> agent.log
+          ls -R >> agent.log
           
-          # 5. Capture Changes
+          # Run onboarding (may take a second)
+          openclaw onboard --auth-choice apiKey --token-provider openrouter --token "$OPENROUTER_API_KEY" >> agent.log 2>&1
+          
+          # Run start command redirecting everything to agent.log
+          openclaw start --issue ${{ github.event.inputs.issue_number }} --model "google/gemini-2.0-flash-exp:free" >> agent.log 2>&1 || (
+            echo "❌ OpenClaw Execution Failed" >> agent.log
+            exit 1
+          )
+          
+          # 5. Finalize
           kill $UPDATER_PID || true
-          DIFF=$(git diff master...HEAD | head -c 3000)
+          DIFF=$(git diff master...HEAD | head -c 4000)
           BRANCH=$(git rev-parse --abbrev-ref HEAD)
           
-          # 6. Send summary to Telegram via Server (to handle buttons)
+          # Send final summary
           curl -X POST "${SERVER_URL}/agent-completion" \
             -H "Content-Type: application/json" \
             -d "{\"issue\": \"${{ github.event.inputs.issue_number }}\", \"diff\": $(echo "$DIFF" | jq -aRs .), \"branch\": \"$BRANCH\"}"
-
-          # Fallback notification
-          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-            -d "chat_id=${CHAT_ID}" \
-            -d "text=✅ <b>AI Run Finished</b>%0ACheck the summary message above to Approve or Make PR." \
-            -d "parse_mode=HTML"
