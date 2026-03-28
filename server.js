@@ -95,15 +95,16 @@ app.get("/", (req, res) => res.send("OK"));
 
 // New endpoint for GitHub Action to notify completion
 app.post("/agent-completion", express.json(), async (req, res) => {
-  const { issue, diff, branch } = req.body;
-  const repo = "foodxp-cms"; // Hardcoded for now as per flow
+  const { issue, diff, branch, repo } = req.body;
+  const shortRepo = repo.split("/").pop(); // Get only the repo name from owner/repo
   
   const msg = `🎨 <b>AI Coding Finished for #${issue}</b>\n\n`
-    + `Branch: <code>${branch}</code>\n\n`
+    + `Branch: <code>${branch}</code>\n`
+    + `Repo: <code>${repo}</code>\n\n`
     + `<b>Changes Summary:</b>\n<pre>${diff.substring(0, 2000)}</pre>\n\n`
     + `Review the code above. If satisfied, click below to start the PR process.`;
     
-  const buttons = [[{ text: "📦 Make PR", callback_data: `cd_pre_pr:${repo}:${branch}:${issue}` }]];
+  const buttons = [[{ text: "📦 Make PR", callback_data: `cd_pre_pr:${shortRepo}:${branch}:${issue}` }]];
   await sendTelegram(msg, { reply_markup: { inline_keyboard: buttons } });
   res.send("OK");
 });
@@ -225,8 +226,9 @@ app.post("/webhook", async (req, res) => {
       // CODE FLOW: Run Agent
       if (data.startsWith("cd_run:")) {
         const [_, repo, num] = data.split(":");
-        await sendTelegram(`🤖 Starting <b>OpenClaw</b> for ${repo} #${num}...\n(Tracking progress live)`);
-        await ghAPI(`/repos/travelxp/${repo}/actions/workflows/openclaw.yml/dispatches`, "POST", { ref: "main", inputs: { issue_number: num } });
+        const target = repo.includes("/") ? repo : `travelxp/${repo}`;
+        await sendTelegram(`🤖 Starting <b>OpenClaw Proxy</b> for ${target} #${num}...\n(Environment: openclaw-notifier)`);
+        await ghAPI("/repos/anish1050/openclaw-notifier/actions/workflows/openclaw.yml/dispatches", "POST", { ref: "main", inputs: { issue_number: num, repo_to_fix: target } });
         await sendTelegram("✅ Dispatch successful.");
       }
 
@@ -235,9 +237,9 @@ app.post("/webhook", async (req, res) => {
         const issues = await ghAPI("/repos/travelxp/foodxp-cms/issues?assignee=AnishTxp&state=open");
         const filtered = issues.filter(i => !i.pull_request);
         if (filtered.length === 0) return await sendTelegram("No issues to bulk code!");
-        await sendTelegram(`⚙️ Starting <b>Bulk Coding</b> for ${filtered.length} issues...`);
+        await sendTelegram(`⚙️ Starting <b>Bulk Proxy Coding</b> for ${filtered.length} issues...`);
         for (const i of filtered) {
-           await ghAPI("/repos/travelxp/foodxp-cms/actions/workflows/openclaw.yml/dispatches", "POST", { ref: "main", inputs: { issue_number: i.number.toString() } });
+           await ghAPI("/repos/anish1050/openclaw-notifier/actions/workflows/openclaw.yml/dispatches", "POST", { ref: "main", inputs: { issue_number: i.number.toString(), repo_to_fix: "travelxp/foodxp-cms" } });
            await sendTelegram(`🚀 Triggered for #${i.number}.`);
            await new Promise(r => setTimeout(r, 2000));
         }

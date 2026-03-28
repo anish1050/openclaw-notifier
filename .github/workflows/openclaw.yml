@@ -1,8 +1,10 @@
-/* Updated .github/workflows/openclaw.yml */
-name: OpenClaw AI Coding
+name: OpenClaw AI Coding (Proxy)
 on:
   workflow_dispatch:
     inputs:
+      repo_to_fix:
+        description: 'Target repo (e.g. travelxp/foodxp-cms)'
+        required: true
       issue_number:
         description: 'Issue number to solve'
         required: true
@@ -11,71 +13,74 @@ jobs:
   code:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
       - name: Setup Node.js
         uses: actions/setup-node@v4
       - name: Install OpenClaw
         run: npm install -g openclaw@latest
         
-      - name: Run OpenClaw with Live Telegram Tracking
+      - name: Run OpenClaw Agent
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
           SERVER_URL: ${{ secrets.RENDER_EXTERNAL_URL }}
         run: |
-          # 1. Initialize Log File
-          touch agent.log
-          
-          # 2. Send initial message
-          RESPONSE=$(curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-            -d "chat_id=${CHAT_ID}" \
-            -d "text=🤖 <b>OpenClaw Agent Started</b> (Issue #${{ github.event.inputs.issue_number }})%0AStarting execution..." \
-            -d "parse_mode=HTML")
-          MSG_ID=$(echo $RESPONSE | jq -r '.result.message_id')
-          
-          if [ "$MSG_ID" == "null" ] || [ -z "$MSG_ID" ]; then
-            echo "Failed to get MSG_ID from Telegram: $RESPONSE"
+          # 1. Check Secrets
+          if [[ -z "$BOT_TOKEN" || -z "$CHAT_ID" || -z "$GH_TOKEN" ]]; then
+            echo "❌ ERROR: Missing required GitHub Secrets in openclaw-notifier!"
             exit 1
           fi
 
-          # 3. Robust background loop
+          # 2. Clone Target Repository
+          # Use GH_TOKEN to clone from travelxp
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${{ github.event.inputs.repo_to_fix }}.git" target_repo
+          cd target_repo
+          
+          # Initialize Local Logs
+          touch agent.log
+          echo "🤖 Connected to ${{ github.event.inputs.repo_to_fix }}. Starting work..." > agent.log
+          
+          # 3. Initialize Progress Tracking in Telegram
+          RESPONSE=$(curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "{\"chat_id\": \"${CHAT_ID}\", \"text\": \"🤖 <b>OpenClaw Proxy Agent</b> (Issue #${{ github.event.inputs.issue_number }})\n📦 Repository: <code>${{ github.event.inputs.repo_to_fix }}</code>\", \"parse_mode\": \"HTML\"}")
+          
+          MSG_ID=$(echo $RESPONSE | jq -r '.result.message_id')
+          if [ "$MSG_ID" == "null" ] || [ -z "$MSG_ID" ]; then
+             echo "❌ Telegram Error during initialization: $RESPONSE"
+             exit 1
+          fi
+          
+          # 4. Background Log Loop
           (
             while sleep 8; do
               if [ -s "agent.log" ]; then
-                LATEST_LOG=$(tail -n 12 agent.log | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
+                LATEST_LOG=$(tail -n 12 agent.log | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g' | tr -d '\r')
                 curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/editMessageText" \
-                  -d "chat_id=${CHAT_ID}" \
-                  -d "message_id=${MSG_ID}" \
-                  -d "parse_mode=HTML" \
-                  -d "text=🤖 <b>OpenClaw Progress</b> (Issue #${{ github.event.inputs.issue_number }})%0A%0A<pre>${LATEST_LOG}</pre>"
+                  -H "Content-Type: application/json" \
+                  -d "{\"chat_id\": \"${CHAT_ID}\", \"message_id\": $MSG_ID, \"text\": \"🤖 <b>OpenClaw Progress</b>\n\n<pre>${LATEST_LOG}</pre>\", \"parse_mode\": \"HTML\"}"
               fi
             done
           ) &
           UPDATER_PID=$!
 
-          # 4. Run OpenClaw with explicit error capture
+          # 5. Execute OpenClaw
           git config --global user.email "bot@openclaw.com"
           git config --global user.name "OpenClaw Bot"
           
-          echo "Current Directory Content:" >> agent.log
-          ls -R >> agent.log
-          
-          # Run onboarding (may take a second)
           openclaw onboard --auth-choice apiKey --token-provider openrouter --token "$OPENROUTER_API_KEY" >> agent.log 2>&1
-          
-          # Run start command redirecting everything to agent.log
           openclaw start --issue ${{ github.event.inputs.issue_number }} --model "google/gemini-2.0-flash-exp:free" >> agent.log 2>&1 || (
             echo "❌ OpenClaw Execution Failed" >> agent.log
             exit 1
           )
           
-          # 5. Finalize
+          # 6. Finalize & Diff
           kill $UPDATER_PID || true
           DIFF=$(git diff master...HEAD | head -c 4000)
           BRANCH=$(git rev-parse --abbrev-ref HEAD)
           
-          # Send final summary
+          # Notify the bot server of completion
           curl -X POST "${SERVER_URL}/agent-completion" \
             -H "Content-Type: application/json" \
-            -d "{\"issue\": \"${{ github.event.inputs.issue_number }}\", \"diff\": $(echo "$DIFF" | jq -aRs .), \"branch\": \"$BRANCH\"}"
+            -d "{\"issue\": \"${{ github.event.inputs.issue_number }}\", \"diff\": $(echo "$DIFF" | jq -aRs .), \"branch\": \"$BRANCH\", \"repo\": \"${{ github.event.inputs.repo_to_fix }}\"}"
