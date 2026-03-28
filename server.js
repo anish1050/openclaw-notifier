@@ -24,19 +24,29 @@ function sendTelegram(text) {
   });
 }
 
-function ghAPI(path) {
+function ghAPI(path, method = "GET", body = null) {
   return new Promise((resolve, reject) => {
-    const req = https.request({
+    const options = {
       hostname: "api.github.com",
       path: path,
-      method: "GET",
+      method: method,
       headers: {
         "Authorization": "Bearer " + GH_TOKEN,
         "User-Agent": "openclaw-notifier",
         "Accept": "application/vnd.github+json"
       }
-    }, res => { let d = ""; res.on("data", c => d += c); res.on("end", () => resolve(JSON.parse(d))); });
+    };
+    if (body) options.headers["Content-Length"] = Buffer.byteLength(JSON.stringify(body));
+
+    const req = https.request(options, res => {
+      let d = "";
+      res.on("data", c => d += c);
+      res.on("end", () => {
+        try { resolve(d ? JSON.parse(d) : {}); } catch (e) { resolve({}); }
+      });
+    });
     req.on("error", reject);
+    if (body) req.write(JSON.stringify(body));
     req.end();
   });
 }
@@ -56,7 +66,7 @@ app.post("/webhook", async (req, res) => {
 
     // Handle /start
     if (text === "/start") {
-      await sendTelegram("🍳 FoodXp Notifier Bot\n\nCommands:\n• Send an issue number like #286 to see details\n• /issues — show all assigned issues\n• /prs — show open PRs\n• /help — show this message");
+      await sendTelegram("🍳 FoodXp Notifier Bot\n\nCommands:\n• Send #286 to see details\n• /code 286 — start AI coding on issue\n• /issues — show all assigned issues\n• /prs — show open PRs\n• /help — show this message");
       return res.send("OK");
     }
 
@@ -124,7 +134,27 @@ app.post("/webhook", async (req, res) => {
       return res.send("OK");
     }
 
-    await sendTelegram("I didn't understand that. Send #number for issue details or /help for commands.");
+    // Handle /code (starts OpenClaw agent)
+    if (text.startsWith("/code")) {
+      const issueNum = text.split(" ")[1];
+      if (!issueNum) {
+        await sendTelegram("Please provide an issue number, e.g., /code 286");
+        return res.send("OK");
+      }
+
+      await sendTelegram("🤖 Triggering <b>OpenClaw</b> for Issue #" + issueNum + "...\nModel: OpenRouter (Claude-3.5-Sonnet)");
+      
+      const payload = {
+        ref: "main", // or your default branch
+        inputs: { issue_number: issueNum.replace("#", "") }
+      };
+
+      await ghAPI("/repos/travelxp/foodxp-cms/actions/workflows/openclaw.yml/dispatches", "POST", payload);
+      await sendTelegram("✅ Workflow dispatched! Tracking progress on GitHub...");
+      return res.send("OK");
+    }
+
+    await sendTelegram("I didn't understand that. Send #number for issue details, /code number to start AI coding, or /help for commands.");
     return res.send("OK");
   } catch (e) {
     console.error(e);

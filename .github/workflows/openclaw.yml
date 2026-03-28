@@ -1,0 +1,29 @@
+name: OpenClaw AI Coding
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Issue number to solve'
+        required: true
+
+jobs:
+  code:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-state: 'latest'
+          
+      - name: Install OpenClaw
+        run: npm install -g openclaw@latest
+        
+      - name: Run OpenClaw Agent
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          openclaw onboard --auth-choice apiKey --token-provider openrouter --token "$OPENROUTER_API_KEY"
+          openclaw start --issue ${{ github.event.inputs.issue_number }} --model "openrouter/anthropic/claude-3.5-sonnet"
