@@ -46,7 +46,12 @@ function ghAPI(path, method = "GET", body = null) {
       let d = "";
       res.on("data", c => d += c);
       res.on("end", () => {
-        try { resolve(d ? JSON.parse(d) : {}); } catch (e) { resolve({}); }
+        if (res.statusCode >= 400) {
+           console.error(`GitHub API Error (${res.statusCode}): ${d}`);
+           try { resolve({ error: res.statusCode, message: JSON.parse(d).message }); } catch(e) { resolve({ error: res.statusCode, message: d }); }
+        } else {
+           try { resolve(d ? JSON.parse(d) : { success: true }); } catch (e) { resolve({ success: true }); }
+        }
       });
     });
     req.on("error", reject);
@@ -228,8 +233,13 @@ app.post("/webhook", async (req, res) => {
         const [_, repo, num] = data.split(":");
         const target = repo.includes("/") ? repo : `travelxp/${repo}`;
         await sendTelegram(`🤖 Starting <b>OpenClaw Proxy</b> for ${target} #${num}...\n(Environment: openclaw-notifier)`);
-        await ghAPI("/repos/anish1050/openclaw-notifier/actions/workflows/openclaw.yml/dispatches", "POST", { ref: "main", inputs: { issue_number: num, repo_to_fix: target } });
-        await sendTelegram("✅ Dispatch successful.");
+        const result = await ghAPI("/repos/anish1050/openclaw-notifier/actions/workflows/openclaw.yml/dispatches", "POST", { ref: "main", inputs: { issue_number: num, repo_to_fix: target } });
+        
+        if (result.error) {
+           await sendTelegram(`❌ <b>Dispatch Failed:</b>\n${result.message || "Unknown error"}`);
+        } else {
+           await sendTelegram("✅ Dispatch successful.");
+        }
       }
 
       // CODE FLOW: Bulk Coding
