@@ -23,32 +23,42 @@ jobs:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
-          # 1. Send initial message and get its ID
-          RESPONSE=$(curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-            -d "chat_id=${CHAT_ID}" -d "text=🤖 *OpenClaw Started for Issue #${{ github.event.inputs.issue_number }}*...%0AInitializing environment..." -d "parse_mode=Markdown")
+          # 1. Initialize Log File
+          touch agent.log
+          
+          # 2. Send initial message and get its ID
+          RESPONSE=$(curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+            -d "chat_id=${CHAT_ID}" \
+            -d "text=🤖 <b>OpenClaw Agent Started</b> (Issue #${{ github.event.inputs.issue_number }})%0A%0A<i>Initializing environment and scanning codebase...</i>" \
+            -d "parse_mode=HTML")
           MSG_ID=$(echo $RESPONSE | jq -r '.result.message_id')
-
-          # 2. Start a background loop to update the message every 20 seconds
+          
+          # 3. Start a background loop to update the message every 8 seconds
           (
-            while sleep 20; do
-              if [ -f "agent.log" ]; then
-                # Get last 10 lines, clean up special chars for URLs
-                LATEST_LOG=$(tail -n 10 agent.log | sed 's/"//g' | sed "s/'//g")
-                curl -s "https://api.telegram.org/bot${BOT_TOKEN}/editMessageText" \
+            while sleep 8; do
+              if [ -s "agent.log" ]; then
+                # Get last 10 lines and escape for HTML
+                LATEST_LOG=$(tail -n 10 agent.log | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
+                
+                curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/editMessageText" \
                   -d "chat_id=${CHAT_ID}" \
                   -d "message_id=${MSG_ID}" \
-                  -d "parse_mode=Markdown" \
-                  -d "text=🤖 *OpenClaw Progress - Issue #${{ github.event.inputs.issue_number }}*%0A%0A\`\`\`%0A${LATEST_LOG}%0A\`\`\`"
+                  -d "parse_mode=HTML" \
+                  -d "text=🤖 <b>OpenClaw Progress</b> (Issue #${{ github.event.inputs.issue_number }})%0A%0A<pre>${LATEST_LOG}</pre>"
               fi
             done
           ) &
           UPDATER_PID=$!
 
-          # 3. Run the Agent
+          # 4. Run the Agent
           openclaw onboard --auth-choice apiKey --token-provider openrouter --token "$OPENROUTER_API_KEY"
-          openclaw start --issue ${{ github.event.inputs.issue_number }} --model "google/gemini-2.0-flash-exp:free" > agent.log 2>&1
+          openclaw start --issue ${{ github.event.inputs.issue_number }} --model "google/gemini-2.0-flash-exp:free" | tee -a agent.log
 
-          # 4. Final Update
-          kill $UPDATER_PID
-          curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-            -d "chat_id=${CHAT_ID}" -d "text=✅ *Task Complete!* Check your GitHub for the new Branch/PR." -d "parse_mode=Markdown"
+          # 5. Final Update
+          sleep 2
+          kill $UPDATER_PID || true
+          
+          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+            -d "chat_id=${CHAT_ID}" \
+            -d "text=✅ <b>AI Task Complete!</b>%0AOpenClaw has finished issue #${{ github.event.inputs.issue_number }}. Check your GitHub for the new branch." \
+            -d "parse_mode=HTML"
