@@ -66,11 +66,13 @@ app.post("/webhook", async (req, res) => {
 
     const helpMsg = "🍳 <b>FoodXp Notifier Bot Help</b>\n\n"
       + "<b>Commands:</b>\n"
-      + "• Send #286 — view issue details\n"
-      + "• /code 286 — start AI coding agent on issue\n\n"
+      + "• Send #286 — view full issue task / description\n"
+      + "• /code 286 — start AI coding on ANY issue\n\n"
       + "<b>Lists:</b>\n"
-      + "• /issues_assigned — open issues assigned to you\n"
-      + "• /issues [repo] — show all issues in a repo (e.g., /issues foodxp-cms)\n"
+      + "• /issues foodxp-cms — all issues in CMS\n"
+      + "• /issues foodxp-b2c-service — all issues in B2C\n"
+      + "• /issues foodxp-mongodb — all issues in MongoDB\n"
+      + "• /issues_assigned — issues assigned to you\n"
       + "• /prs — show your open PRs\n"
       + "• /help — show this menu";
 
@@ -144,7 +146,7 @@ app.post("/webhook", async (req, res) => {
 
       const labels = issue.labels ? issue.labels.map(l => l.name).join(", ") : "none";
       const assignees = issue.assignees ? issue.assignees.map(a => a.login).join(", ") : "none";
-      const body = issue.body ? issue.body.substring(0, 1000) : "No description";
+      const body = issue.body || "No description provided.";
       const isPR = issue.pull_request ? "🔀 Pull Request" : "📋 Issue";
 
       const msg = isPR + " #" + issueNum + "\n\n"
