@@ -148,7 +148,8 @@ app.post("/webhook", async (req, res) => {
         const filtered = Array.isArray(issues) ? issues.filter(i => !i.pull_request).slice(0, 15) : [];
         if (filtered.length === 0) return await sendTelegram("No open issues in " + repo);
         const list = filtered.map(i => "• #" + i.number + " — " + i.title).join("\n");
-        await sendTelegram("📂 <b>" + repo + "</b> Issues:\n\n" + list);
+        const buttons = [[{ text: "👁️ View Closed", callback_data: "cd_rl:" + repo + ":closed" }]];
+        await sendTelegram("📂 <b>" + repo + "</b> Issues:\n\n" + list, { reply_markup: { inline_keyboard: buttons } });
       }
 
       // CODE FLOW: Root Menu
@@ -226,7 +227,6 @@ app.post("/webhook", async (req, res) => {
         });
       }
 
-      // MB Step 3: PR selected -> Post to Message Board
       if (data.startsWith("mb_s:")) {
         const [_, pId, prNum] = data.split(":");
         const pr = await ghAPI("/repos/travelxp/foodxp-cms/pulls/" + prNum);
@@ -240,8 +240,9 @@ app.post("/webhook", async (req, res) => {
         }
 
         const mbId = mbTool.url.split("/").pop().replace(".json", "");
+        const points = pr.body ? pr.body.split("\n").filter(l => l.trim().startsWith("-")).map(l => "<li>" + l.replace("-", "").trim() + "</li>").join("") : "<li>No details.</li>";
         const bodyContent = "<div><strong>What Changed</strong><br/>" 
-          + "<ul>" + (pr.body ? pr.body.split("\n").filter(l => l.trim().startsWith("-")).map(l => "<li>" + l.replace("-", "").trim() + "</li>").join("") : "<li>No details.</li>") + "</ul>"
+          + "<ul>" + points + "</ul>"
           + "<br/><a href=\"" + pr.html_url + "\">" + pr.html_url + "</a><br/>🚀</div>";
 
         await bcAPI("/buckets/" + pId + "/message_boards/" + mbId + "/messages.json", "POST", {
@@ -249,7 +250,7 @@ app.post("/webhook", async (req, res) => {
           content: bodyContent
         });
         
-        await sendTelegram("✅ Successfully updated the Basecamp Message Board!");
+        await sendTelegram("✅ Successfully updated the " + project.name + " Message Board!");
       }
 
       // PR FLOW: Show PRs by state
@@ -277,16 +278,16 @@ app.post("/webhook", async (req, res) => {
 
     const helpMsg = "🚀 <b>OpenClaw AI & Notifier Dashboard</b>\n\n"
       + "<b>🤖 AI AGENT (OpenClaw)</b>\n"
-      + "• Send <code>#286</code> — view the full task description\n"
-      + "• <code>/code 286</code> — start AI to fix issue #286\n\n"
+      + "• /code — start the interactive AI coding menu\n"
+      + "• Send #286 — view the full task description\n\n"
       + "<b>🍱 GITHUB TOOLS</b>\n"
-      + "• <code>/issues</code> — list issues by repository\n"
-      + "• <code>/issues_assigned</code> — issues assigned to you\n"
-      + "• <code>/prs</code> — view your open pulls\n\n"
+      + "• /issues — list issues by repository\n"
+      + "• /issues_assigned — view your tickets\n"
+      + "• /prs — view your open/closed pulls\n\n"
       + "<b>🏕️ BASECAMP TOOLS</b>\n"
-      + "• <code>/review</code> — post PR to Campfire\n"
-      + "• <code>/update_message_board</code> — log PR changes\n"
-      + "• <code>/bc_todos</code> — your active tasks\n\n"
+      + "• /review — post PR request to Campfire\n"
+      + "• /update_message_board — log PR changes\n"
+      + "• /bc_todos — view your active tasks\n\n"
       + "<i>Type /help anytime to see this menu.</i>";
 
     // Handle /start and /help
