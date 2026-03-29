@@ -232,7 +232,7 @@ app.post("/webhook", async (req, res) => {
       if (data.startsWith("cd_run:")) {
         const [_, repo, num] = data.split(":");
         const target = repo.includes("/") ? repo : `travelxp/${repo}`;
-        await sendTelegram(`🤖 Starting <b>OpenClaw Proxy</b> for ${target} #${num}...\n(Environment: openclaw-notifier)`);
+        await sendTelegram(`🤖 Starting <b>OpenClaw MK3F</b> for ${target} #${num}...\n(Hq: openclaw-mk3f.onrender.com)`);
         const result = await ghAPI("/repos/anish1050/openclaw-notifier/actions/workflows/openclaw.yml/dispatches", "POST", { ref: "main", inputs: { issue_number: num, repo_to_fix: target } });
         
         if (result.error) {

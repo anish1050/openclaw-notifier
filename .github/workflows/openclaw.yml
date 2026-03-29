@@ -70,7 +70,7 @@ jobs:
           git config --global user.name "OpenClaw Bot"
           
           openclaw onboard --auth-choice apiKey --token-provider openrouter --token "$OPENROUTER_API_KEY" >> agent.log 2>&1
-          openclaw start --issue ${{ github.event.inputs.issue_number }} --model "google/gemini-2.0-flash-exp:free" >> agent.log 2>&1 || (
+          openclaw start --issue ${{ github.event.inputs.issue_number }} --model "google/gemini-2.0-flash-001" --gateway-url "https://openclaw-mk3f.onrender.com" --gateway-token "${{ secrets.OPENCLAW_TOKEN }}" >> agent.log 2>&1 || (
             echo "❌ OpenClaw Execution Failed" >> agent.log
             exit 1
           )
